@@ -1,8 +1,11 @@
 # Contribution [1]: Locations: manage OSM changes (e.g. a shop changes brand)
 
 **Contribution Number:** [1]
-**Student:** Hop Le  
+
+**Student:** Hop Le
+
 **Issue:**  https://github.com/openfoodfacts/open-prices/issues/1018
+
 **Status:** Phase I Complete
 
 ---
