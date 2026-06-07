@@ -1,19 +1,22 @@
-# Contribution [#]: [Issue Title]
+# Contribution [1]: Locations: manage OSM changes (e.g. a shop changes brand)
 
-**Contribution Number:** [1 / 2 / 3]  
-**Student:** [Your Name]  
-**Issue:** [GitHub issue link]  
-**Status:** [Phase I / Phase II / Phase III / Phase IV] [In Progress / Complete]
+**Contribution Number:** [1]
+**Student:** Hop Le  
+**Issue:**  https://github.com/openfoodfacts/open-prices/issues/1018
+**Status:** Phase I Complete
 
 ---
 
 ## Why I Chose This Issue
 
-[1-2 paragraphs explaining why this issue interests you, how it matches your skills/learning goals, what you hope to learn]
+I chose this issue because it's a real data integrity problem — exactly what I work on as a Cloud/ML/Data/DevOps engineer. The issue is labeled top issue, help wanted and Data quality
 
----
+My background in ETL pipeline (PySpark, PostgreSQL) and database optimization maps directly to what's needed here: a careful schema migration, a constraint update, and extending an existing Django management command without breaking historical data. I also want to practice making backward-compatible changes to a live open-source codebase, which is a skill I'll carry into production cloud and data engineering work.
+
+Left a comment on the issue introducing myself. The issue is labeld as top issue but inactive since Mar 12.
 
 ## Understanding the Issue
+
 
 ### Problem Description
 
