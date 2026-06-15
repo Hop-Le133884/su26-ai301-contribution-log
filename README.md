@@ -99,7 +99,7 @@ make migrate-db
   and silently overwrites `osm_brand`/`osm_version` with current OSM data
   instead of creating a new versioned record. There is no `osm_version_date`
   field and no mechanism to route prices to the correct brand by date.
-
+![alt text](<Screenshot From 2026-06-15 11-53-06.png>)
 ---
 
 ## Solution Approach
