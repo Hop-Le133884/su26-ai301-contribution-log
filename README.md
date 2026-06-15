@@ -20,22 +20,26 @@ Left a comment on the issue introducing myself. The issue is labeld as top issue
 
 ## Understanding the Issue
 
-
 ### Problem Description
 
-[In your own words, what's broken or missing?]
+Open Prices stores grocery price data tied to physical store locations. Each location is identified by an OSM ID - a unique number from OpenStreetMap that represents a physical spot on the map (a building, a store front). The problem is that businesses change over time: a Casino supermarket can rebrand to Intermarche, same building, same OSM ID, but a completely different brand. Currently the system has no way to represent this. It stores one location record per OSM ID forever, and when the brand changes in OSM, the old brand data is silently overwritten. Historical prices that were recorded under the old brand now incorrectly show the new brand name.
 
 ### Expected Behavior
 
-[What should happen?]
+The system should support multiple versioned Location records for the same OSM ID, each representing a different time period. A price recorded in 2023 at OSM ID 298872652 (when it was Casino) should remain linked to Casino. A price recorded in 2024 at the same OSM ID (now Intermarche) should be linked to Internarche. The system needs an needs an `osm_version_date` field to know when each version became active, and the unique constraint should be relaxed to allow `(osm_id, osm_type, osm_version)` instead of just `(osm_id, osm_type)`.
 
 ### Current Behavior
 
-[What actually happens?]
+When a second POST is made to '/api/v1/locations' with the same `osm_id` and `osm_type`, the API returns the exisiting record with `"detail":"duplicate"` and silently updates `osm_brand` and `osm_version` to the current OSM values. The old brand is permanently lost. There is no versioned history, no `osm_version_date`, and no way to route historical prices to the correct brand.
 
 ### Affected Components
 
-[Which parts of the codebase are involved?]
+- `open_prices/locations/model.py` - Unique constraint and missing `osm_version_date` field
+- `open_prices/locations/migrations/` - needs new migration for constraint + field change
+- `open_prices/common/openstreetmap.py` - `get_location_dict()` fetches current OSM data only
+- `open_prices/locations/tasks.py` - `fetch_and_save_data_from_openstreetmap()` overwrites instead of versioning
+- `open_prices/locations/management/commands/set_location_osm_brand_and_version.py` - backfill command needs to populate `osm_version_date`
+- `open_prices/locations/tests.py` - existing unique constraint tests will need updating
 
 ---
 
@@ -43,19 +47,58 @@ Left a comment on the issue introducing myself. The issue is labeld as top issue
 
 ### Environment Setup
 
-[Notes on setting up your local development environment - challenges you faced, how you solved them]
+FOUR ISSUES ENCOUNTED DURING LOCAL SETUP:
+
+1. **`TAG=lastest` in `.env` caused Docker to pull a broken pre-built image from `ghcr.io`** instead of building locally. The pre-built image had permission `rwxr-x--xx` on `/docker-entrypoint.sh` executeable but not readable. The container runs as user `off` (UID 1000) who is neither root nor in the root group, so it hit the `--x' slot and bash could not read the script to execute it. Root cause in 'Dockerfile` line 87: `RUN chmod +x /docker-entrypoint.sh` only adds execute permission, not read.
+FIX: `chmod 755 /docker-entrypoint.sh` before rebuilding.
+
+2. **`TAG=latest` in `.env` pointed to `ghrc.io/.../api:latest`** which is the production image, not the locally-built dev image.
+FIX: run with `TAG=dev` prefix or change `.env` to 'TAG=dev'.
+
+3. **Missing Docker network `po_default`** - had to create manually: `docker network create po_default`.
+
+4. **Scheduler errors on startup** (`ralation "django_q_ormq" does not exist`) - expected before migrations; resolved by running `make migrate-db` after containers were up
+
+**Working dev startup sequence:**
+```bash
+chmod 755 docker/docker-entrypoint.sh
+docker compose -f docker-compose.yml -f docker/dev.yml build --no-cache api
+TAG=dev docker compose -f docker-compose.yml -f docker/dev.yml up
+### THEN
+make migrate-db
+```
 
 ### Steps to Reproduce
 
-1. [Step 1]
-2. [Step 2]
-3. [Observed result]
+1. Start the dev environment (see above). Confirm API responds:
+```bash
+    curl http://127.0.0.1:8000/api/v1/locations
+    # Return: {"items":[],"page":1,"pages":1,"size":10,"total":0}
+```
+
+2. Create a location with a real OSM ID that has a rebrand history:
+```bash
+   curl -X POST http://127.0.0.1:8000/api/v1/locations \
+     -H "Content-Type: application/json" \
+     -d '{"type":"OSM","osm_id":298872652,"osm_type":"NODE"}'
+   # Returns id:1, osm_brand:null, osm_version:null (OSM fetch is async)
+```
+
+3. 3. POST again with the same `osm_id` and `osm_type`:
+```bash
+   curl -X POST http://127.0.0.1:8000/api/v1/locations \
+     -H "Content-Type: application/json" \
+     -d '{"type":"OSM","osm_id":298872652,"osm_type":"NODE"}'
+```
+4. **Observed result:** The API returns the call record (`id:1`) with `"detail":"duplicate"`. By the second call, the async OSM fetch has `osm_brand:"Intermarche"`. No new versioned record was created. Any prices recorded before the rebrand now incorrectly show Intermache. Historical brand data is permanently lost.
 
 ### Reproduction Evidence
 
-- **Commit showing reproduction:** [Link to commit in your fork]
-- **Screenshots/logs:** [If applicable]
-- **My findings:** [What you discovered during reproduction]
+- **Branch:** https://github.com/Hop-Le133884/open-prices/tree/fix/osm-location-versioning
+- **Key finding:** Second POST to same OSM ID returns `"detail":"duplicate"`
+  and silently overwrites `osm_brand`/`osm_version` with current OSM data
+  instead of creating a new versioned record. There is no `osm_version_date`
+  field and no mechanism to route prices to the correct brand by date.
 
 ---
 
@@ -63,30 +106,41 @@ Left a comment on the issue introducing myself. The issue is labeld as top issue
 
 ### Analysis
 
-[Your analysis of the root cause - what's causing the issue?]
+The root cause is a data model assumption that one physical OSM location equals one database record forever. The specific gaps:
+
+1. **Hard uniqueness constraint** on `(osm_id, osm_type)` in `Location.Meta.constraints` - prevents storing multiple versions of the same location.
+2. **No `osm_version_date` field** - `osm_version` exists as an integer but there is no timestamp for when that version became active, making it impossible to route prices to the correct brand by date.
+3. **No re-check logic** - `tasks.py -> fetch_and_save_data_from_openstreetmap()` overwrites the current record when OSM data changes instead of creating a new versioned record. The management command `set_location_osm_brand_and_version` only backfills `osm_version=None` records and never detects version increments on already-populated locations.
 
 ### Proposed Solution
 
-[High-level description of your fix approach]
+Relax the unique constraint to `(osm_id, osm_type, osm_version)` and add a `osm_version_date` field to the local model, update the OSM fetch logic to detect version changes and create new records rather than overwrite, and extend the backfill management command to populate `osm_version_date` on existing records. 
 
 ### Implementation Plan
 
-Using UMPIRE framework (adapted):
+**Understand:** The same OSM ID can represent different businesses over time. Prices must be linked to the correct brand based on when they were recorded. The DB currently enforces one record per OSM ID, making versioned history immossible.
 
-**Understand:** [Restate the problem]
-
-**Match:** [What similar patterns/solutions exist in the codebase?]
+**Match:** The existing `osm_version` field and `get_history_location_From_openstreetmap()` in `openstreetmap.py` already fetch versioned OSM data - the infrastructure exists but is not wired into the write path. Migration `0007_alter_location_osm_brand_and_osm_version` shows the team already started thinking about versioning. Maintainer `raphodn` opened draft PR `#1021` with a detection script that compares `response.version() != location.osm_version` and checks whether `name` or `brand` changed, this is the correct singal for a meaningful rebrand vs a minor OSM edit. PHASE III builds directly on his dectetion login by adding record creation after detection, plus the model and constraint changes that make it possible.
 
 **Plan:** [Step-by-step implementation plan]
-1. [Modify file X to do Y]
-2. [Add function Z]
-3. [Update tests]
 
-**Implement:** [Link to your branch/commits as you work]
+1. `open_prices/locations/model.py` - Add `osm_version_date` DatetimeField (nullable). Change the unique constraint from `(osm_id, osm_type)` to `(osm_id, osm_type, osm_version)`.
+2. open_prices/locations/migrations/` - new migration to alter the constraint and add the new field.
+3. `open_prices/common/openstreetmap.py` - Update `get_location_dict()` to also return `osm_version_date` from OSM API response timestamp and add the new field.
+4. `open_prices/locations/tasks.py` — Update `fetch_and_save_data_from_openstreetmap()` to compare the fetched `osm_version` against the stored value. If changed, create a new Location record rather than overwriting; if same, update in place.
+5. `open_prices/locations/management/commands/set_location_osm_brand_and_version.py` - Extend to also populate `osm_version_date` for existing records.
+6. `open_prices/locations/tests.py` — Update the existing unique constraint test (line 77) to reflect the new `(osm_id, osm_type, osm_version)` constraint. Add new tests: same OSM ID with two versions stores two records; prices route to correct brand by date.
 
-**Review:** [Self-review checklist - does it follow the project's contribution guidelines?]
+**Implement:** https://github.com/Hop-Le133884/open-prices/tree/fix/osm-location-versioning
 
-**Evaluate:** [How will you verify it works?]
+**Review:** Check `CONTRIBUTING.md` for PR conventions; ensure migration is
+backward-compatible (nullable field, no data loss); run full test suite with
+`make tests`; verify the 15 existing location tests still pass.
+
+**Evaluate:** Write a test that creates two Location records with the same
+`osm_id/osm_type` but different `osm_version`, confirms both are stored
+without a constraint violation, and confirms that a price dated before the
+rebrand resolves to the old brand record.
 
 ---
 
