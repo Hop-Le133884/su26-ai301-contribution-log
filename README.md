@@ -165,21 +165,114 @@ rebrand resolves to the old brand record.
 
 ## Implementation Notes
 
-### Week [X] Progress
+### Week 1 Progress
 
-[What you built this week, challenges faced, decisions made]
+Built complete OSM location versioning support across 5 files in 5 commits.
 
-### Week [Y] Progress
+**What I built:**
+- Added `osm_version_date` DateTimeField (nullable) to the `Location` model so
+  the system knows when each OSM version became active
+- Updated the unique constraint from `(osm_id, osm_type)` to
+  `(osm_id, osm_type, osm_version)` so multiple versions of the same physical
+  location can coexist in the database
+- Generated and applied migration `0010_add_osm_version_date_and_update_unique_constraint`
+- Updated `get_location_from_openstreetmap()` in `openstreetmap.py` to return
+  `version_date` from the OSM API timestamp
+- Updated `fetch_and_save_data_from_openstreetmap()` in `tasks.py` to detect
+  meaningful rebrands (version changed AND name or brand changed) and create a
+  new Location record instead of overwriting the existing one — based on the
+  detection logic from maintainer raphodn's draft PR #1021
+- Extended the backfill management command
+  `set_location_osm_brand_and_version.py` to also populate `osm_version_date`
+  for existing records
+- Updated the existing unique constraint test to reflect new versioning behavior
+- Added new `LocationVersioningTest` class with
+  `test_same_osm_id_different_version_allowed`
 
-[Continue documenting as you work]
-
-### Code Changes
-
-- **Files modified:** [List]
-- **Key commits:** [Links to important commits]
-- **Approach decisions:** [Why you chose certain approaches]
+**Key decisions made:**
+- Used `version_changed AND identity_changed` as the rebrand signal (same logic
+  as raphodn's PR #1021) — this avoids creating new records for minor OSM edits
+  like opening hours or phone number changes
+- Used `TYPE_OSM_OPTIONAL_FIELDS` to filter which fields get passed to
+  `Location.objects.create()` — keeps the create call safe and explicit
+- Kept the `else` branch in `tasks.py` to preserve existing update-in-place
+  behavior for non-rebrand changes
 
 ---
+
+## Challenges Faced
+
+**1. Docker permission bug (`chmod +x` vs `chmod 755`)**
+The project's `Dockerfile` uses `RUN chmod +x docker-entrypoint.sh` which sets
+world-execute but not world-read. The container runs as user `off` (UID 1000)
+who is neither root nor in the root group, so bash could not read the script.
+Fixed by running `chmod 755 docker/docker-entrypoint.sh` before rebuilding.
+This is a real bug that affects all new contributors and is worth reporting
+separately.
+
+**2. `TAG=latest` in `.env` pulled broken production image**
+The `.env` file ships with `TAG=latest` which causes Docker to pull the
+pre-built `ghcr.io` image instead of building locally. Fixed by running with
+`TAG=dev` prefix or changing `.env` to `TAG=dev`.
+
+**3. Pre-commit failing on Python 3.14**
+Fedora 44 ships Python 3.14 as the system Python but the project requires 3.11.
+`uv run pre-commit install` failed trying to build `pillow` and `pydantic-core`
+against 3.14. Fixed with `uv run --python 3.11 pre-commit install`.
+
+**4. Test editing mistakes**
+Accidentally edited the `osm_type` loop in `tests.py` when only the unique
+constraint block needed changing. Recovered using the `.bak` backup file.
+Lesson: always make a backup before editing test files manually.
+
+**Tools that helped:**
+- `sed -n 'X,Yp'` to read exact line ranges before editing
+- `.bak` backup files before any manual edit
+- Running tests after every single change to catch breakage immediately
+- raphodn's draft PR #1021 for the change detection logic pattern
+
+---
+
+## Testing Strategy
+
+### Unit Tests Added
+- `test_same_osm_id_different_version_allowed` in `LocationVersioningTest`:
+  creates two Location records with the same `osm_id + osm_type` but different
+  `osm_version` (16 = Casino, 21 = Intermarché), confirms both are stored,
+  each has the correct brand, and versions are distinct
+
+### Existing Tests Updated
+- `test_location_osm_id_type_validation` in `LocationModelSaveTest`: updated
+  the unique constraint assertion to use explicit `osm_version=1` and `osm_version=2`
+  to reflect the new `(osm_id, osm_type, osm_version)` constraint
+
+### Validation Performed
+- Ran `make migrate-db` successfully after migration
+- Confirmed 16/16 tests passing after all changes
+- Manually verified via `curl` that the API accepts two locations with the same
+  OSM ID when `osm_version` differs
+
+---
+
+## Code Changes
+
+**Files modified:**
+- `open_prices/locations/models.py`
+- `open_prices/locations/migrations/0010_add_osm_version_date_and_update_unique_constraint.py`
+- `open_prices/locations/tests.py`
+- `open_prices/common/openstreetmap.py`
+- `open_prices/locations/tasks.py`
+- `open_prices/locations/management/commands/set_location_osm_brand_and_version.py`
+
+**Key commits:**
+- `feat(Locations): add osm_version_date field and update unique constraint to support versioning`
+- `feat(Locations): add version_date to OSM API response`
+- `feat(Locations): create new location record on OSM version and identity change`
+- `feat(Locations): populate osm_version_date in backfill management command`
+- `test(Locations): add versioning test for same OSM ID with different versions`
+
+**Branch:**
+https://github.com/Hop-Le133884/open-prices/tree/fix/osm-location-versioning
 
 ## Pull Request
 
