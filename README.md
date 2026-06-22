@@ -165,7 +165,7 @@ rebrand resolves to the old brand record.
 
 ## Implementation Notes
 
-### Week 1 Progress
+### Week 3 Progress
 
 Built complete OSM location versioning support across 5 files in 5 commits.
 
