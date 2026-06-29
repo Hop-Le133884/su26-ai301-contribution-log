@@ -6,7 +6,7 @@
 
 **Issue:**  https://github.com/openfoodfacts/open-prices/issues/1018
 
-**Status:** Phase I Complete
+**Status:** Phase IV (received Maintainer Feedback, revised and All CI checks green ✅. Awaiting code review.)
 
 ---
 
@@ -276,31 +276,45 @@ https://github.com/Hop-Le133884/open-prices/tree/fix/osm-location-versioning
 
 ## Pull Request
 
-**PR Link:** [GitHub PR URL when submitted]
+**PR Link:** https://github.com/openfoodfacts/open-prices/pull/1374
 
-**PR Description:** [Draft or final PR description - much of the content above can be adapted]
+**PR Description:**
+What does this PR do?: Adds support for OSM location versioning so that when a shop rebrands (e.g. Casino → Intermarché), the system creates a new Location record for the new version instead of overwriting the existing one. This preserves historical brand data and ensures prices recorded before the rebrand stay linked to the correct brand.
+
+Why was this PR needed?: Issue #1018 reported that Open Prices stores one Location record per OSM ID forever. When OSM data updates (a rebrand or new tenant), the old brand data is silently overwritten. Historical prices then incorrectly show the new brand name, breaking data integrity.
+
+What are the relevant issue numbers?: Closes #1018. Builds on draft PR #1021 by maintainer raphodn (his exploration script for detecting OSM version changes).
+
+Does this PR meet the acceptance criteria?:
+[x] New `osm_version_date` field added to Location model
+[x] Unique constraint updated to `(osm_id, osm_type, osm_version)`
+[x] Migration created and tested
+[x] Detection logic creates new record on rebrand instead of overwriting
+[x] `get_latest_by_osm()` helper handles multi-version lookups
+[x] Tests added for new versioning behavior
+[x] All 418 tests passing in CI
+[x] Follows project's ruff style guide and conventional commit format
+[x] No breaking changes — existing single-version locations continue to work
 
 **Maintainer Feedback:**
-- [Date]: [Summary of feedback received]
-- [Date]: [How you addressed it]
+- Jun 28: CI failed on `test_location_create_duplicate` because the new unique constraint allowed two locations with `osm_version=NULL` to coexist (`NULL != NULL` in Postgres). Fixed by replacing the post-save constraint catch with a pre-save lookup using `get_latest_by_osm()`.
+- Jun 28: Reviewer TTalex asked what would happen in `proofs/models.py` when multiple Location objects share the same `osm_id` + `osm_type` — the existing `get_or_create()` would throw `MultipleObjectsReturned`. Addressed by replacing `get_or_create()` with `get_latest_by_osm()` plus create-if-missing fallback. Updated in commit `7755a17`.
+- Jun 28: All CI checks green ✅. Awaiting code review.
 
-**Status:** [Awaiting review / Iterating / Approved / Merged]
-
----
+**Status:** [Awaiting review]
 
 ## Learnings & Reflections
 
-### Technical Skills Gained
-
-[What you learned technically]
-
-### Challenges Overcome
-
-[What was hard and how you solved it]
-
-### What I'd Do Differently Next Time
-
-[Reflection on your process]
+Biggest lesson: A small schema change has wide blast radius. Loosening the
+unique constraint on `Location` looked like a 3-line model change but
+quietly broke duplicate detection in `views.py` and location lookup in
+`proofs/models.py` — code I hadn't touched. Reading the failing CI test
+and the reviewer's question forced me to trace every call site that
+assumed "one OSM ID equals one location." The fix was a small QuerySet
+helper, but finding the right shape took reading the existing codebase
+carefully. AI tools sped up the search, but the real work was understanding
+why every existing caller assumed uniqueness and what the right shared
+contract should be going forward.
 
 ---
 
